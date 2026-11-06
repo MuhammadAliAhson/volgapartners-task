@@ -60,8 +60,6 @@ class Settings(BaseSettings):
         "ogg",
         "opus",
         "aac",
-        "webm",
-        "mp4",
     )
 
     @field_validator("elevenlabs_api_key", mode="before")

@@ -47,7 +47,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="transcriber",
         description="Transcribe an audio file to JSON, SRT, VTT, and plain text.",
     )
-    parser.add_argument("audio", type=Path, help="Audio or video file to transcribe")
+    parser.add_argument("audio", type=Path, help="Audio file to transcribe")
     parser.add_argument("--engine", choices=["whisper", "elevenlabs"], default=None)
     parser.add_argument("--model", default=None, help="Whisper size or ElevenLabs model id")
     parser.add_argument("--language", default=None, help="Force a language code")

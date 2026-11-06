@@ -1,6 +1,6 @@
 """ffmpeg and ffprobe operations.
 
-Every media file is decoded to 16 kHz mono PCM so the rest of the pipeline has
+Every audio file is decoded to 16 kHz mono PCM so the rest of the pipeline has
 one layout to cut, sample, and transcribe. Commands are argument lists with a
 timeout; the shell is never involved.
 """
@@ -60,7 +60,7 @@ def probe(path: Path, timeout: float) -> AudioInfo:
 
 
 def normalize(src: Path, dst: Path, timeout: float) -> None:
-    """Decode any container to 16 kHz mono PCM WAV, dropping video streams.
+    """Decode an audio file to 16 kHz mono PCM WAV.
 
     The output is written to a sibling temp file and then renamed, so a crash
     cannot leave a half-written file at ``dst`` for a later resume to trust.
@@ -78,7 +78,7 @@ def normalize(src: Path, dst: Path, timeout: float) -> None:
                 "error",
                 "-i",
                 str(src),
-                "-vn",
+                "-vn",  # drop a cover image stored as a video stream inside an audio file
                 "-ac",
                 "1",
                 "-ar",

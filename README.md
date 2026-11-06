@@ -1,6 +1,6 @@
 # Transcription pipeline
 
-Turn an audio or video file into a timestamped transcript from the command line.
+Turn an audio file into a timestamped transcript from the command line.
 
 ```text
 audio → validate → normalize to 16 kHz mono WAV → detect language once → split on silence → transcribe each chunk → shift timestamps → clean text → export JSON / SRT / VTT / TXT
@@ -86,11 +86,11 @@ Each section is one choice: what the code does, why it does it that way, and wha
 
 ### Audio formats
 
-**Choice.** Check the extension, confirm with `ffprobe` that an audio stream exists, then convert everything to 16 kHz mono WAV. Video is dropped.
+**Choice.** Accept audio files only. Check the extension, confirm with `ffprobe` that an audio stream exists, then convert it to 16 kHz mono WAV. Video files such as MP4 are rejected.
 
 **Why.** A renamed text file can end in `.mp3`, so the extension alone is not enough. After that check, every later step should see one layout. The chunker, the language clips, and both engines then share one path. Whisper also expects 16 kHz audio. Writing the WAV under a temporary name and renaming it means a crash cannot leave a half-written file that the next run would trust.
 
-**Trade-off.** Every file is decoded once, even if it was already a WAV. That decode is cheaper than teaching each step to read MP3, M4A, and MP4.
+**Trade-off.** Every file is decoded once, even if it was already a WAV. That decode is cheaper than teaching each step to read MP3, M4A, and FLAC.
 
 ### Long audio
 
