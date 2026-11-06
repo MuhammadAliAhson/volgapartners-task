@@ -135,6 +135,7 @@ Exporters then render that object. They do not clean text again, so a subtitle a
 - Zero-duration audio is a successful empty transcript (`word_count == 0`). It does not call the engine.
 - Retry jitter is uniform in `[0, retry_base_delay]`. Delay after attempt `n` (from 0) is `base * 2^n + jitter`. Only `TransientEngineError` is retried.
 - The Whisper model is cached on the engine instance, behind a lock, not in a process-wide global. The API builds one engine per job. `max_concurrent_jobs` defaults to 1, so one job means one model.
+- faster-whisper 1.2 still passes `metadata_errors` to `av.open`. PyAV 19 removed that argument, so the Whisper engine strips it before decoding. The audio is already normalized to WAV by ffmpeg, so the metadata flag is not needed.
 - ElevenLabs `language_code` is stored as returned (ISO 639-1 or 639-3). The API key is read from `ELEVENLABS_API_KEY`.
 - The API job index is in memory. Restarting the process forgets ids even if files remain under `data/`.
 - Exporting a job that is not `completed` returns 409.

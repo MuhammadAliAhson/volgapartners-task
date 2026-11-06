@@ -6,11 +6,12 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import av
 import pytest
-from tests.conftest import make_settings
+from tests.conftest import make_settings, write_wav
 
 from transcriber.engines import get_engine
-from transcriber.engines.whisper import WhisperEngine, weighted_language_vote
+from transcriber.engines.whisper import WhisperEngine, _relax_pyav, weighted_language_vote
 from transcriber.exceptions import (
     ConfigurationError,
     PermanentEngineError,
@@ -100,6 +101,15 @@ def test_unknown_engine_name() -> None:
     """The factory fails before any audio work when the name is not supported."""
     with pytest.raises(ConfigurationError, match="Unknown engine"):
         get_engine("nope", make_settings())
+
+
+def test_pyav19_open_accepts_removed_metadata_argument(tmp_path: Path) -> None:
+    """faster-whisper still passes metadata_errors, which PyAV 19 removed."""
+    audio = tmp_path / "clip.wav"
+    write_wav(audio, 0.2)
+    _relax_pyav()
+    with av.open(str(audio), metadata_errors="ignore") as container:
+        assert len(container.streams.audio) == 1
 
 
 def test_empty_clips_skip_the_model() -> None:
