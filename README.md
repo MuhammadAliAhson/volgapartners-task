@@ -1,52 +1,49 @@
 # Transcription pipeline
 
-Turn an audio or video file into a timestamped transcript. One pipeline normalizes the media, detects the language once, splits long files on silence, and writes JSON, SubRip, WebVTT, and plain text.
+Turn an audio or video file into a timestamped transcript from the command line.
 
 ```text
-audio → validate → ffmpeg normalize (16 kHz mono WAV) → detect language once → plan chunks at silences → transcribe each chunk with the language forced → add chunk offset → merge → postprocess → export JSON / SRT / VTT / TXT
+audio → validate → normalize to 16 kHz mono WAV → detect language once → split on silence → transcribe each chunk → shift timestamps → clean text → export JSON / SRT / VTT / TXT
 ```
 
-Finished stages are written to a work directory. Running the same command again with that directory skips work that already succeeded.
+Each finished stage is saved in a work directory. Run the same command again with that directory, and completed chunks are skipped.
 
 ## Quickstart
 
-Install [ffmpeg](https://ffmpeg.org/) (both `ffmpeg` and `ffprobe` must be on `PATH`), then:
+### Requirements
+
+- Python 3.11 or newer
+- `ffmpeg` and `ffprobe` on `PATH`
+
+### Install
 
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
-pip install -e ".[api,dev]"
+pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env` only if you want ElevenLabs. Whisper, the default, needs no key.
+Whisper is the default engine and does not need an API key. To use ElevenLabs later, set the key in `.env` at the project root:
 
-Transcribe a file. This writes `transcript.json`, `transcript.srt`, and `transcript.txt` in the output directory:
+```text
+ELEVENLABS_API_KEY=your_key_here
+```
+
+`.env` is listed in `.gitignore`. `.env.example` lists every setting, with a short note on what each one does.
+
+### Command line
+
+Put sample files in the `audios` folder. These commands write `transcript.json`, `transcript.srt`, and `transcript.txt`:
 
 ```bash
 transcriber sample.mp3 --out-dir out
 transcriber interview.wav --engine whisper --model tiny --language en --workdir work --format json,srt,vtt,txt -v
 ```
 
-`--workdir` is what makes resume work. If the process stops after chunk 2, the same command continues at chunk 3.
+`--workdir` keeps checkpoints. If the process stops after chunk 2, the same command continues at chunk 3.
 
-Start the API (one job at a time by default):
-
-```bash
-uvicorn transcriber.api.app:app --host 0.0.0.0 --port 8000
-```
-
-```bash
-curl -s -F "file=@sample.mp3" -F "engine=whisper" http://127.0.0.1:8000/v1/transcriptions
-curl -s http://127.0.0.1:8000/v1/transcriptions/JOB_ID
-curl -s "http://127.0.0.1:8000/v1/transcriptions/JOB_ID/export?format=srt" -o transcript.srt
-curl -s -X DELETE http://127.0.0.1:8000/v1/transcriptions/JOB_ID
-curl -s http://127.0.0.1:8000/health
-```
-
-`POST` returns `202` with an id. Poll until `status` is `completed`, then export. The upload is stored as `data/<id>/audio.<ext>`. The client's filename is never used as a path.
-
-## Output schema
+## Output
 
 Timestamps are seconds from the start of the original file.
 
@@ -61,114 +58,128 @@ Timestamps are seconds from the start of the original file.
 }
 ```
 
-SRT uses `HH:MM:SS,mmm`. WebVTT uses a dot before the milliseconds. Hours are not wrapped at 24, so a two-hour file shows `02:00:00`. Milliseconds use half-up rounding.
+- SRT timestamps use a comma: `HH:MM:SS,mmm`.
+- WebVTT timestamps use a dot: `HH:MM:SS.mmm`.
+- Hours are not wrapped at 24. Two hours is `02:00:00`.
+- Milliseconds use half-up rounding.
 
 ## Design decisions
 
-### Engine choice
+Each section is one choice: what the code does, why it does it that way, and what that costs.
 
-Whisper is the default because a reviewer can run the project with no account, no GPU, and no audio leaving the machine. `faster-whisper` with `int8` is the CPU-friendly build of that model. ElevenLabs Scribe is optional: it is accurate and does not need a local model, but it is paid and the audio is sent to ElevenLabs.
+### Engines
 
-| | Whisper (`faster-whisper`) | ElevenLabs Scribe |
+**Choice.** Whisper is the default. ElevenLabs is optional. Both sit behind the same two methods, `detect_language` and `transcribe`. The pipeline is given an engine. It never builds one itself.
+
+**Why.** Whisper is free, runs on this machine, and needs no key, so the project can be tried without an account. The audio never leaves the machine. ElevenLabs is there when a cloud model is worth paying for and no local GPU is available. One interface means the chunking, timestamps, and exporters stay the same when the engine changes. Passing the engine in means tests can use a fake and never download a model.
+
+| | Whisper | ElevenLabs Scribe |
 |---|---|---|
 | Cost | Free, local | Paid API |
 | Privacy | Audio stays on the machine | Audio is uploaded |
-| Setup | ffmpeg + a model download on first use | `ELEVENLABS_API_KEY` |
-| Hardware | CPU is enough (`int8`); GPU is used when present | No local GPU |
-| Timestamps | Segment-level from the model | Word-level, grouped into segments |
-| Language | `detect_language` on several clips, then forced | No detect endpoint; the middle clip is transcribed and `language_code` is kept |
+| Setup | ffmpeg, then a model download on first use | `ELEVENLABS_API_KEY` in `.env` |
+| Hardware | CPU is enough (`int8`); a GPU is used when present | No local GPU |
+| Timestamps | Segments from the model | Words, then grouped into segments |
+| Language | Probability vote across several clips, then forced | No detect call; the middle clip's `language_code` is kept |
 
-Both engines implement the same protocol (`detect_language`, `transcribe`). The pipeline does not know which one it has. Timestamps from either engine are relative to the chunk; only the pipeline adds the chunk offset.
+**Trade-off.** ElevenLabs can be more accurate, but it costs money and sends the audio to a third party.
 
 ### Audio formats
 
-The extension is checked against an allow-list, then ffprobe decides whether an audio stream exists. A renamed `.txt` is rejected even if it ends in `.wav`. After that, ffmpeg decodes everything to 16 kHz mono PCM WAV (`-vn`, so a video file works). One layout downstream means the chunker, the language sampler, and both engines share a single code path. The cost is an extra decode. That is cheaper than teaching every stage about MP3, M4A, and MP4.
+**Choice.** Check the extension, confirm with `ffprobe` that an audio stream exists, then convert everything to 16 kHz mono WAV. Video is dropped.
 
-The normalized WAV is renamed into place. A crash during decode cannot leave a half-written file that a later resume would trust.
+**Why.** A renamed text file can end in `.mp3`, so the extension alone is not enough. After that check, every later step should see one layout. The chunker, the language clips, and both engines then share one path. Whisper also expects 16 kHz audio. Writing the WAV under a temporary name and renaming it means a crash cannot leave a half-written file that the next run would trust.
+
+**Trade-off.** Every file is decoded once, even if it was already a WAV. That decode is cheaper than teaching each step to read MP3, M4A, and MP4.
 
 ### Long audio
 
-Target chunk length is 10 minutes (`chunk_seconds=600`). The planner walks forward by that amount and, within ±`silence_window_seconds`, snaps the cut to the nearest silence. Silences come from ffmpeg `silencedetect`; the value used is the midpoint, which is the point least likely to sit inside a word. Because a word is not split, chunks do not overlap and the merge step does not have to delete duplicated words.
+**Choice.** Files longer than about 11 minutes are cut into pieces of about 10 minutes. The cut looks for a pause within ±60 seconds and uses the middle of that pause. If there is no pause, the cut is at the 10-minute mark. Pieces meet exactly. They do not overlap. Each finished piece is saved under `--workdir`.
 
-If nothing is quiet near the goal, the cut is a hard cut at the goal. The next goal is one target length after the cut that was actually chosen, so an early snap does not make the following chunk longer than the window allows. Planning stops when the tail is at most `chunk_seconds + silence_window_seconds`, which bounds the last chunk. Cuts that would leave less than one second on either side are rejected.
+**Why.** Whisper's model only reads about 30 seconds at a time. `faster-whisper` already walks a long piece in those windows, and it starts the next window at the last finished word, so a word on the 30-second edge is heard again and not dropped. This project does not cut every 30 seconds, because those windows are not saved. A 10-minute piece is the unit that can be retried and resumed. A pause is the cut point so the cut falls between words. Overlap is avoided because the same words would then appear twice and need a second merge step.
 
-Each chunk is transcribed with retries, its timestamps are shifted by `chunk.start`, and the segment list is saved atomically (`write temp` + `os.replace`). The chunk WAV is deleted after the checkpoint so disk use stays flat. A second run with the same `--workdir` loads the language, the plan, and any finished chunks and does not call the engine for those chunks. Checkpoints live under `workdir/<engine>/`, so switching engines cannot reuse another engine's text.
+**Trade-off.** If someone talks through the whole minute around a 10-minute boundary, the cut can split a word. Pieces run one after another. Only one piece is in memory at a time.
 
-What this does not do: there is no overlap. Continuous speech with no silence falls back to hard cuts, which can split a word. Chunks are sequential, so a long file takes as long as the sum of its chunks. Memory stays roughly one chunk plus the model, not the whole file.
+### Language
 
-### Language detection
+**Choice.** Detect the language once, save it, and force that language on every piece. Three clips are taken, near 25%, 50%, and 75% of the file. A short file uses one clip from the start. `--language` skips detection.
 
-The language is chosen once, then forced on every chunk.
+**Why.** A quiet or noisy piece can be detected as the wrong language, and the rest of that piece comes out wrong. One decision is also faster, because detection does not run again inside every piece. Several clips are used because a single clip may be music or silence. Whisper adds up the language probabilities and keeps the winner. ElevenLabs has no separate detect call, so the middle clip is transcribed and its language code is stored. The saved language is reused on resume. A later run that asks for a different language transcribes the pieces again. The cut plan stays, because where to cut does not depend on language.
 
-Per-chunk auto-detect looks attractive and is worse here. A quiet chunk, a music bed, or a short answer can flip the language, and the rest of that chunk becomes garbage. A fixed language is also faster: Whisper does not re-run detection inside every chunk, and Scribe is told `language_code` up front.
-
-Detection uses several clips (by default at 25%, 50%, and 75%) because one clip can be silence or music. Short audio (no longer than one clip) uses a single clip from the start. Whisper sums language probabilities across clips and picks the winner. Scribe has no separate detect call, so the middle clip is transcribed and its `language_code` is stored.
-
-A caller-supplied `--language` wins and is stored. If a later run asks for a different language, chunk checkpoints are dropped and transcribed again. The plan (where to cut) does not depend on language, so it is kept.
-
-Known limitation: code-switched audio. One forced language cannot represent a conversation that changes language and stays there.
+**Trade-off.** One language cannot follow a conversation that switches language and stays there.
 
 ### Timestamps
 
-Segment times in the output are seconds from the start of the original file, not from the start of a chunk. Engines return times relative to the chunk they were given. The pipeline adds `chunk.start` before the checkpoint is written, so a resume does not add the offset twice.
+**Choice.** Every segment has a start and an end, in seconds from the start of the original file. The engine's times start at zero for the piece it was given. The pipeline adds the piece start once, then saves that result.
 
-Whisper already returns segments. ElevenLabs returns words (`timestamps_granularity=word`). `words_to_segments` drops spacing and audio events, then starts a new segment on sentence-ending punctuation (`.`, `!`, `?`), on a gap longer than one second, or when the segment would exceed 15 seconds. Abbreviations that end with a period can split early. That is the trade-off for a pure function with no sentence parser.
+**Why.** Subtitles and search need a time in the original recording, not a time inside a 10-minute piece. Adding the offset before the save means a resumed run does not add it a second time. Whisper already returns segments. ElevenLabs returns words, so those words are grouped into a segment on sentence punctuation (`.`, `!`, `?`), on a pause longer than one second, or when the segment would pass 15 seconds. Spacing and non-speech events are ignored.
 
-### Downstream use
+**Trade-off.** An abbreviation that ends with a period can start a new segment early. Whisper output is segment-level, not word-level.
 
-Search, subtitle players, LLM summarization, and analytics all want the same thing: text that is not blank, not repeated, and anchored to the file. `postprocess` does that in a fixed order:
+### Prepared output
 
-1. Collapse whitespace inside each segment.
+**Choice.** Clean the transcript in a fixed order, then export that same object as JSON, SRT, VTT, or TXT. The exporters do not clean the text again.
+
+**Why.** Search, subtitles, summarization, and analytics all need text that is readable and tied to a time. Doing the cleanup once means the subtitle and the JSON cannot disagree.
+
+1. Collapse extra whitespace.
 2. Drop empty segments.
-3. Drop a segment whose text is identical to the previous one (a Whisper repeat loop).
-4. Sort by start time and clamp `end` to the file duration.
-5. Rebuild `text` and `word_count` from the segments that remain.
+3. Drop a segment whose text is the same as the previous one. This removes a Whisper repeat.
+4. Sort by start time and keep each end inside the file duration.
+5. Rebuild the full text and the word count from the segments that remain.
 
-Exporters then render that object. They do not clean text again, so a subtitle and the JSON cannot disagree.
+**Trade-off.** Two different sentences that happen to use the same words, one after the other, are treated as a repeat and the second is dropped.
 
-## Assumptions and known limitations
+## Assumptions and limitations
 
-- The repository root is the project. The name `transcription-pipeline` is the distribution name; the import package is `transcriber`.
-- "Short audio" for chunking means `duration <= chunk_seconds + silence_window_seconds` (one chunk, no silence scan). "Short" for language sampling means `duration <= language_clip_seconds` (one clip from the start).
-- The next cut goal is one target length after the previous cut, not a fixed grid from t=0. When two silences are equally close, the earlier one wins.
-- A file ffprobe cannot identify as audio is `UnsupportedFormatError`. Timeouts, a missing ffmpeg binary, and a failed decode are `AudioProcessingError`.
-- Zero-duration audio is a successful empty transcript (`word_count == 0`). It does not call the engine.
-- Retry jitter is uniform in `[0, retry_base_delay]`. Delay after attempt `n` (from 0) is `base * 2^n + jitter`. Only `TransientEngineError` is retried.
-- The Whisper model is cached on the engine instance, behind a lock, not in a process-wide global. The API builds one engine per job. `max_concurrent_jobs` defaults to 1, so one job means one model.
-- faster-whisper 1.2 still passes `metadata_errors` to `av.open`. PyAV 19 removed that argument, so the Whisper engine strips it before decoding. The audio is already normalized to WAV by ffmpeg, so the metadata flag is not needed.
-- ElevenLabs `language_code` is stored as returned (ISO 639-1 or 639-3). The API key is read from `ELEVENLABS_API_KEY`.
-- The API job index is in memory. Restarting the process forgets ids even if files remain under `data/`.
-- Exporting a job that is not `completed` returns 409.
-- No database, queue, authentication, or overlap-merge. No speaker diarization. No word-level timestamps for Whisper (Scribe words are grouped into segments before they leave the engine).
+- The installable project name is `transcription-pipeline`. The Python import name is `transcriber`.
+- A file shorter than about 11 minutes is one piece. Silence detection is skipped because there is nothing to split.
+- A file shorter than one language clip is sampled from the start only.
+- The next cut is measured from the previous cut, not from a fixed grid. If two pauses are equally close, the earlier one is used.
+- A file that is not audio is an unsupported format. A missing `ffmpeg`, a timeout, or a broken decode is an audio-processing error.
+- Silent or empty audio returns an empty transcript. That is a success, not an error.
+- Only a temporary engine failure is retried. A bad key or a bad request fails immediately. The wait doubles after each attempt.
+- The Whisper model is loaded once per run and reused.
+- faster-whisper 1.2 still passes an argument that PyAV 19 removed. The Whisper engine strips that argument before decoding.
+- There are no speaker labels, and Whisper does not return word-level times.
 
-## Testing and layout
+## Testing and project structure
 
 ```bash
 make check
 ```
 
-That runs `ruff check`, `ruff format --check`, `mypy --strict` on `src`, and `pytest` with coverage required at 85% or higher. FFmpeg tests are marked `integration` and still run in the default suite. They are skipped only when `ffmpeg` or `ffprobe` is absent. Network, a real Whisper download, and an ElevenLabs key are not required: Whisper is exercised with a fake model, and Scribe is exercised with `respx`.
+`make check` runs Ruff, Ruff format, `mypy --strict` on `src`, and pytest. Coverage must stay at 85% or higher. Tests that need ffmpeg are skipped only when ffmpeg is missing. The suite does not download a Whisper model, call ElevenLabs, or use the network. Whisper is tested with a fake model. Scribe is tested with a mocked HTTP client.
 
 ```text
 src/transcriber/
-  config.py  models.py  exceptions.py  retry.py
-  audio/ffmpeg.py  audio/chunking.py
-  engines/base.py  engines/whisper.py  engines/elevenlabs.py
-  language.py  workspace.py  pipeline.py
-  postprocess.py  exporters.py  cli.py
-  api/  app, schemas, jobs, errors
-tests/   one module per area, plus conftest.py
+  config.py          settings from the environment and .env
+  models.py          Segment, ChunkSpec, TranscriptionResult
+  exceptions.py      error types
+  retry.py           retry transient engine failures
+  audio/ffmpeg.py    probe, normalize, cut, find silences
+  audio/chunking.py  plan cut points
+  engines/           Whisper and ElevenLabs
+  language.py        sample clips and resolve one language
+  workspace.py       checkpoints for resume
+  pipeline.py        the steps in the diagram above
+  postprocess.py     clean the transcript
+  exporters.py       JSON, SRT, VTT, TXT
+  cli.py             the transcriber command
+tests/               one test module per area
 ```
-
-`TranscriptionPipeline` receives the engine and the settings. It never constructs an engine. Pure functions (`find_cuts`, `words_to_segments`, `postprocess`, the exporters, `format_timestamp`) hold the logic that is easy to get wrong.
 
 ## Future improvements
 
-- Word-level timestamps for Whisper (`word_timestamps=True`) and the same grouping used for Scribe.
-- Speaker diarization, which neither engine is asked for today.
-- Parallel chunk transcription. Checkpoints already make the chunks independent; the default is serial so a laptop does not load the model twice.
-- Per-chunk language detection for code-switched audio, as an explicit opt-in. The default should stay "detect once".
+- Word-level timestamps for Whisper, grouped the same way as Scribe words.
+- Speaker labels.
+- Parallel chunk transcription. Chunks are already independent. The default stays serial so one machine loads the model once.
+- Optional per-chunk language detection for audio that changes language. The default stays one language for the whole file.
 
-## Part 2: System Design
+## Related work
 
-_To be added by the author._
+I have built this kind of system before.
+
+- **Final year project.** A Whisper model I fine-tuned on agricultural speech, used in [Kisan Rabta](https://github.com/MuhammadAliAhson/Kisan_rabta_web).
+- **Podcast AI.** A project I shipped at my most recent company. I can walk through that work in the next round.
+

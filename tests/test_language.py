@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from tests.conftest import FakeEngine, make_settings, requires_ffmpeg
+from tests.conftest import FakeEngine, requires_ffmpeg
 
 from transcriber.language import clip_starts, resolve_language, sample_clips
 from transcriber.workspace import JobWorkspace
@@ -101,8 +101,3 @@ def test_sample_clips_on_long_and_short_audio(tone_with_silences: Path, tmp_path
         timeout=30,
     )
     assert len(short_clips) == 1
-
-
-def test_make_settings_helper_is_used_by_language_retries() -> None:
-    """The shared helper builds a Settings object tests can pass around."""
-    assert make_settings().max_retries == 3

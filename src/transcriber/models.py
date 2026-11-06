@@ -1,7 +1,6 @@
 """Immutable records shared by the pipeline, engines, and exporters.
 
-Frozen models keep a finished transcript from being edited in place, which
-matters once the same object is handed to the API and to file exporters.
+Frozen models keep a finished transcript from being edited after it is built.
 """
 
 from typing import Self

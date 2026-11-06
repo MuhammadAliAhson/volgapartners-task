@@ -1,7 +1,7 @@
 """Engine factory.
 
-The pipeline never constructs an engine itself. Callers (the CLI, the API, and
-tests) choose one here and pass it in.
+The pipeline never constructs an engine itself. The command line and the tests
+choose one here and pass it in.
 """
 
 from transcriber.config import Settings

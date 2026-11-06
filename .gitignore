@@ -12,5 +12,7 @@ build/
 *.egg-info/
 .env
 data/
+out/
+work/
 *.tmp
 .partial.wav

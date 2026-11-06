@@ -1,9 +1,9 @@
-.PHONY: install format lint typecheck test check run-api
+.PHONY: install format lint typecheck test check
 
 PYTHON ?= python
 
 install:
-	$(PYTHON) -m pip install -e ".[api,dev]"
+	$(PYTHON) -m pip install -e ".[dev]"
 
 format:
 	$(PYTHON) -m ruff format .
@@ -20,6 +20,3 @@ test:
 	$(PYTHON) -m pytest
 
 check: lint typecheck test
-
-run-api:
-	$(PYTHON) -m uvicorn transcriber.api.app:app --host 0.0.0.0 --port 8000

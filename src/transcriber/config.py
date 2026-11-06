@@ -5,7 +5,6 @@ so tests can construct a small, explicit configuration.
 """
 
 import os
-from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
@@ -64,9 +63,6 @@ class Settings(BaseSettings):
         "webm",
         "mp4",
     )
-    max_upload_mb: int = Field(default=100, ge=1)  # API upload limit
-    max_concurrent_jobs: int = Field(default=1, ge=1)  # API worker threads
-    data_dir: Path = Path("data")  # API job storage
 
     @field_validator("elevenlabs_api_key", mode="before")
     @classmethod

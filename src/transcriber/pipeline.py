@@ -1,7 +1,7 @@
 """Orchestrate validation, normalization, language, chunking, and export prep.
 
 The pipeline receives its engine and settings. It does not construct engines,
-so tests can pass a fake and the API can choose the engine per request.
+so tests can pass a fake and the command line can choose the engine per run.
 """
 
 import logging
@@ -10,7 +10,6 @@ from pathlib import Path
 
 from transcriber.audio import ffmpeg
 from transcriber.audio.chunking import build_plan, find_cuts
-from transcriber.audio.ffmpeg import AudioInfo
 from transcriber.config import Settings
 from transcriber.engines.base import SpeechToTextEngine
 from transcriber.exceptions import UnsupportedFormatError
@@ -81,7 +80,7 @@ class TranscriptionPipeline:
         )
         return result
 
-    def _validate(self, audio_path: Path) -> AudioInfo:
+    def _validate(self, audio_path: Path) -> None:
         if not audio_path.is_file():
             raise FileNotFoundError(audio_path)
         extension = audio_path.suffix.lower().lstrip(".")
@@ -91,7 +90,6 @@ class TranscriptionPipeline:
         if not info.has_audio:
             raise UnsupportedFormatError(f"No audio stream in {audio_path.name}")
         logger.info("Validated %s (%.2fs)", audio_path.name, info.duration)
-        return info
 
     def _ensure_normalized(self, source: Path, workspace: JobWorkspace) -> None:
         destination = workspace.normalized_path()
